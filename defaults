@@ -1,0 +1,22 @@
+{
+  "ref_dir": "oss://genomics-platform-reference-data/GRCh38.d1.vd1/",
+  "fasta": "GRCh38.d1.vd1.fa",
+  "dbsnp_dir": "oss://genomics-platform-reference-data/GRCh38.d1.vd1/",
+  "dbsnp": "dbsnp_146.hg38.vcf",
+  "dbmills_dir": "oss://genomics-platform-reference-data/GRCh38.d1.vd1/",
+  "db_mills": "Mills_and_1000G_gold_standard.indels.hg38.vcf",
+  "annovar_database": "oss://genomics-platform-reference-data/annovar/annovar_ym/annovar/humandb/",
+  "bed_file": "",
+  "interval_padding":"100",
+  "fastp_docker_image": "registry.cn-shanghai.aliyuncs.com/choppy-pipe/fastp:0.19.6",
+  "fastqc_docker_image": "registry.cn-shanghai.aliyuncs.com/choppy-pipe/fastqc:0.11.8",
+  "bwa_docker_image": "registry-internal.cn-shanghai.aliyuncs.com/choppy-pipe/bwa:v0.7.17_cv1",
+  "gatk_docker_image": "registry.cn-shanghai.aliyuncs.com/choppy-pipe/sentieon-replaced:2.0",
+  "filter_gatk_docker_image": "registry.cn-shanghai.aliyuncs.com/choppy-pipe/gatk:4.4.0.0",
+  "annovar_docker": "registry.cn-shanghai.aliyuncs.com/choppy-pipe/annovar:v20191024",
+  "qualimap_docker_image": "registry.cn-shanghai.aliyuncs.com/choppy-pipe/qualimap:2.0.0",
+  "SMALLcluster_config": "OnDemand bcs.ps.g.xlarge img-ubuntu-vpc",
+  "BIGcluster_config": "OnDemand bcs.a2.7xlarge img-ubuntu-vpc",
+  "MEDcluster_config": "OnDemand bcs.b2.3xlarge img-ubuntu-vpc",
+  "platform": "ILLUMINA"
+}
