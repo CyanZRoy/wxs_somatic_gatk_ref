@@ -1,0 +1,21 @@
+# Local requirement notes, test results, and troubleshooting files.
+wdl修改部分*.txt
+resutls_此目录不需要上传到github/
+results_此目录不需要上传到github/
+异常排查/
+wxs_somatic_gatk_ref_part/
+
+# Legacy helper scripts and old figures are not used by this WDL package.
+codescripts/
+pictures/
+
+# Unused standalone task kept only as local history.
+tasks/learn_read_orientation_model.wdl
+
+# Local Cromwell/task byproducts.
+*.log
+*.tmp
+tmp/
+work/
+cromwell-executions/
+cromwell-workflow-logs/

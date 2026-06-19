@@ -1,35 +1,46 @@
 task annovar_annotation {
 
-    # 输入来自 filter_and_select_pass_variants task
-    # 注意：你的脚本是针对 .filter.vcf 文件，我们将遵循这个逻辑
+    # Input from filter_and_select_pass_variants task.
     File filtered_vcf
     String tumor_sample_name
 
-    # Annovar 数据库，打包为 tar.gz 文件
-    File annovar_database # e.g., "humandb_hg38.tar.gz"
+    # ANNOVAR database directory, e.g. humandb.
+    File annovar_database
 
-    # Annovar 参数
     String buildver = "hg19"
     String protocols = "refGene,clinvar_20240917,dbnsfp47a,cosmic103_genome"
     String operations = "g,f,f,f"
     String cluster_config
     String docker_image
 
-
-    # 定义输出文件的前缀
     String output_prefix = "${tumor_sample_name}"
 
-    # 磁盘空间估算：数据库解压后大小 + 输入VCF + 输出VCF + 20GB 缓冲
-    # 这是一个粗略估算，Annovar 数据库可能很大
-    Int disk_gb = ceil(ceil(size(filtered_vcf, "GB") * 4)) + 420
+    Int raw_disk_gb = ceil(ceil(size(filtered_vcf, "GB") * 4)) + 420
+    Int disk_gb = if raw_disk_gb > 1000 then 1000 else raw_disk_gb
 
     command <<<
         set -e
+        call_dir="$PWD"
+        copy_task_logs() {
+            cp -f "$call_dir/script" "$call_dir/script.txt" 2>/dev/null || true
+            cp -f "$call_dir/stdout" "$call_dir/stdout.txt" 2>/dev/null || true
+            cp -f "$call_dir/stderr" "$call_dir/stderr.txt" 2>/dev/null || true
+        }
+        trap copy_task_logs EXIT
+        local_work="/tmp/${tumor_sample_name}_annovar"
+        mkdir -p "$local_work"
+        cp -f ${filtered_vcf} "$local_work/input.vcf.gz"
+        cd "$local_work"
 
-        # 步骤 2: 运行 Annovar 注释
-        # Docker 镜像中 Annovar 的路径为 /opt/annovar/
-        # 我们将解压后的 'humandb' 目录作为数据库路径
-        /installations/annovar/table_annovar.pl ${filtered_vcf} \
+        variant_count=$(gzip -cd input.vcf.gz | awk 'BEGIN{n=0} !/^#/ {n++} END{print n}')
+        if [ "$variant_count" -eq 0 ]; then
+            gzip -cd input.vcf.gz > ${output_prefix}.${buildver}_multianno.vcf
+            printf 'Chr\tStart\tEnd\tRef\tAlt\tFunc.refGene\tGene.refGene\tGeneDetail.refGene\tExonicFunc.refGene\tAAChange.refGene\tclinvar_20240917\tdbnsfp47a\tcosmic103_genome\tOtherinfo\n' > ${output_prefix}.${buildver}_multianno.txt
+            cp -f ${output_prefix}.${buildver}_multianno.vcf ${output_prefix}.${buildver}_multianno.txt "$call_dir"/
+            exit 0
+        fi
+
+        /installations/annovar/table_annovar.pl input.vcf.gz \
             ${annovar_database} \
             -buildver ${buildver} \
             -out ${output_prefix} \
@@ -39,20 +50,17 @@ task annovar_annotation {
             -nastring . \
             -vcfinput \
             -thread $(nproc)
+        cp -f ${output_prefix}.${buildver}_multianno.vcf ${output_prefix}.${buildver}_multianno.txt "$call_dir"/
     >>>
 
     output {
-        # Annovar 使用 -vcfinput 参数会生成一个带 .hg38_multianno.vcf 后缀的 VCF 文件
         File annotated_vcf = "${output_prefix}.${buildver}_multianno.vcf"
-
-        # 同时捕获 Annovar 生成的 tab 分隔的注释文本文件
         File annotated_txt = "${output_prefix}.${buildver}_multianno.txt"
     }
 
     runtime {
         docker: docker_image
-        cluster: cluster_config
-        systemDisk: "cloud_ssd 40"
-        dataDisk: "cloud_ssd " + disk_gb + " /cromwell_root/"
+        instanceTypes: [cluster_config]
+        systemDisk: "cloud " + disk_gb
     }
 }

@@ -1,48 +1,57 @@
 task fastqc {
 
-    # 输入是两个经过 trim 的 FASTQ 文件
+    # Trimmed paired FASTQs from fastp.
     File trimmed_fastq1
     File trimmed_fastq2
     String sample_id
-    # --- 平台特定输入 ---
+    # Platform runtime inputs.
     String docker_image
     String cluster_config
 
 
-    # 从输入文件名中提取基本名称，用于构造输出文件名
-    # 例如，从 "sample1_1.trimmed.fq.gz" 提取 "sample1_1.trimmed"
+    # Derive output prefixes from input FASTQ names.
     String base_name_1 = basename(trimmed_fastq1, ".fq.gz")
     String base_name_2 = basename(trimmed_fastq2, ".fq.gz")
 
-    # 估算磁盘空间
-    Int disk_gb = ceil(size(trimmed_fastq1, "GB") + size(trimmed_fastq2, "GB")) + 50
+    # Estimate disk from input FASTQ size.
+    Int raw_disk_gb = ceil(size(trimmed_fastq1, "GB") + size(trimmed_fastq2, "GB")) + 120
+    Int disk_gb = if raw_disk_gb > 1000 then 1000 else raw_disk_gb
 
     command <<<
         set -e
+        call_dir="$PWD"
+        copy_task_logs() {
+            cp -f "$call_dir/script" "$call_dir/script.txt" 2>/dev/null || true
+            cp -f "$call_dir/stdout" "$call_dir/stdout.txt" 2>/dev/null || true
+            cp -f "$call_dir/stderr" "$call_dir/stderr.txt" 2>/dev/null || true
+        }
+        trap copy_task_logs EXIT
+        local_work="/tmp/${sample_id}_fastqc"
+        mkdir -p "$local_work"
+        cp -f ${trimmed_fastq1} "$local_work/${base_name_1}.fq.gz"
+        cp -f ${trimmed_fastq2} "$local_work/${base_name_2}.fq.gz"
+        cd "$local_work"
 
-        # fastqc 会自动在指定的输出目录中创建报告文件
-        # -o . 表示将输出文件生成在当前工作目录中
-        # 这在 WDL 中是标准做法，不需要再手动创建目录
+        # Run FastQC and write reports in the local work directory.
         fastqc -t $(nproc) \
-               ${trimmed_fastq1} \
-               ${trimmed_fastq2} \
+               "${base_name_1}.fq.gz" \
+               "${base_name_2}.fq.gz" \
                -o .
+        cp -f "${base_name_1}_fastqc.html" "${base_name_1}_fastqc.zip" "${base_name_2}_fastqc.html" "${base_name_2}_fastqc.zip" "$call_dir"/
     >>>
 
     output {
-        # fastqc 为每个输入文件生成一个 html 报告和一个 zip 压缩包
-        # 我们使用之前定义的 base_name 变量来捕获正确的输出文件名
+        # FastQC produces one HTML report and one ZIP archive per FASTQ.
         File html_report_1 = "${base_name_1}_fastqc.html"
         File zip_archive_1 = "${base_name_1}_fastqc.zip"
         File html_report_2 = "${base_name_2}_fastqc.html"
         File zip_archive_2 = "${base_name_2}_fastqc.zip"
     }
 
-    # runtime 块定义任务运行所需的环境和资源
+    # Container image and cloud runtime resources.
     runtime {
         docker: docker_image
-        cluster: cluster_config
-        systemDisk: "cloud_ssd 40"
-        dataDisk: "cloud_ssd " + disk_gb + " /cromwell_root/"
+        instanceTypes: [cluster_config]
+        systemDisk: "cloud " + disk_gb
     }
 }

@@ -1,41 +1,60 @@
 task bqsr_base_recalibrator_spark {
 
-    # 输入来自 mark_duplicates_spark task
+    # Deduplicated BAM from MarkDuplicatesSpark.
     File dedup_bam
     File dedup_bam_index
     String sample_id
     File? intervals_bed
     String interval_padding
 
-    # 参考基因组和相关文件
+    # Reference FASTA directory.
     File ref_dir
     String fasta
 
-    # 已知变异位点文件 (例如 dbSNP)
+    # Known-sites resources used by BaseRecalibrator.
     File dbsnp_dir
     String dbsnp
     File dbmills_dir
     String db_mills
 
-    # --- 平台特定输入 ---
+    # Platform runtime inputs.
     String docker_image
     String cluster_config
 
 
-    # 定义输出文件的名称
+    # Output recalibration table name.
     String recal_table_filename = "${sample_id}.recal_data.table"
 
-    # 机器有 16 核，但根据要求，只为 Spark 分配 12 个线程
+    # Spark resource settings for BaseRecalibratorSpark.
     Int spark_executor_cores = 12 
-    # 机器有 32GB 内存，为主进程留 6GB，剩下 26GB 给 Spark
+    # Keep memory for the driver and assign the rest to Spark executor.
     Int java_driver_memory_gb = 6
     Int spark_executor_memory_gb = 26
 
-    # 磁盘空间估算：输入 BAM 大小 + 参考基因组大小 + 20GB 缓冲
-    Int disk_gb = ceil(size(dedup_bam, "GB"))*4 + 420
+    # Estimate disk for BAM input, Spark temporary files, and known-sites resources.
+    Int raw_disk_gb = ceil(size(dedup_bam, "GB"))*4 + 420
+    Int disk_gb = if raw_disk_gb > 1000 then 1000 else raw_disk_gb
 
     command <<<
         set -e
+        call_dir="$PWD"
+        copy_task_logs() {
+            cp -f "$call_dir/script" "$call_dir/script.txt" 2>/dev/null || true
+            cp -f "$call_dir/stdout" "$call_dir/stdout.txt" 2>/dev/null || true
+            cp -f "$call_dir/stderr" "$call_dir/stderr.txt" 2>/dev/null || true
+        }
+        trap copy_task_logs EXIT
+        local_work="/tmp/${sample_id}_bqsr_recal"
+        mkdir -p "$local_work" "$local_work/tmp" "$local_work/spark"
+        export TMPDIR="$local_work/tmp"
+        export TMP="$TMPDIR"
+        export TEMP="$TMPDIR"
+        export _JAVA_OPTIONS="-Djava.io.tmpdir=$TMPDIR"
+        cp -f ${dedup_bam} "$local_work/input.bam"
+        cp -f ${dedup_bam_index} "$local_work/input.bam.bai"
+        cp -f ${dbsnp_dir}/${dbsnp}* "$local_work"/
+        cp -f ${dbmills_dir}/${db_mills}* "$local_work"/
+        cd "$local_work"
 
         if [ ${intervals_bed} ]; then
             INTERVAL="--intervals ${intervals_bed} --interval-padding ${interval_padding}"
@@ -43,15 +62,17 @@ task bqsr_base_recalibrator_spark {
             INTERVAL=""
         fi
 
-        gatk --java-options "-Xmx${java_driver_memory_gb}G" BaseRecalibratorSpark \
+        gatk --java-options "-Djava.io.tmpdir=$TMPDIR -Xmx${java_driver_memory_gb}G" BaseRecalibratorSpark \
             -R ${ref_dir}/${fasta} \
-            -I ${dedup_bam} \
-            --known-sites ${dbsnp_dir}/${dbsnp} \
-            --known-sites ${dbmills_dir}/${db_mills} \
+            -I input.bam \
+            --known-sites ${dbsnp} \
+            --known-sites ${db_mills} \
             -O ${recal_table_filename} \
             $INTERVAL \
+            --conf "spark.local.dir=$local_work/spark" \
             --conf 'spark.executor.cores=${spark_executor_cores}' \
             --conf 'spark.executor.memory=${spark_executor_memory_gb}g'
+        cp -f ${recal_table_filename} "$call_dir"/
     >>>
 
     output {
@@ -60,8 +81,7 @@ task bqsr_base_recalibrator_spark {
 
     runtime {
         docker: docker_image
-        cluster: cluster_config
-        systemDisk: "cloud_ssd 40"
-        dataDisk: "cloud_ssd " + disk_gb + " /cromwell_root/"
+        instanceTypes: [cluster_config]
+        systemDisk: "cloud " + disk_gb
     }
 }

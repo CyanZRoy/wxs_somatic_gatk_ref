@@ -1,43 +1,61 @@
 task mark_duplicates_spark {
 
-    # 输入来自 bwa_mem_and_sort task
+    # Sorted BAM from BWA alignment.
     File input_bam
     File input_bam_index  # GATK tools require the index file
     String sample_id
 
-    # --- 平台特定输入 ---
+    # Platform runtime inputs.
     String docker_image
     String cluster_config # e.g., "ecs.g6.4xlarge" for 16c/32GB
 
 
-    # 定义输出文件的名称
+    # Output BAM and metrics file names.
     String output_bam_name = "${sample_id}.dedup.bam"
     String metrics_file_name = "${sample_id}.metrics.txt"
 
-    # 磁盘空间估算：输入 BAM * 2.5 (为 shuffle 空间和输出留足余量) + 20GB 缓冲
-    Int disk_gb = ceil(size(input_bam, "GB") * 4) + 420
+    # Estimate disk for BAM input, Spark shuffle, and output BAM.
+    Int raw_disk_gb = ceil(size(input_bam, "GB") * 4) + 420
+    Int disk_gb = if raw_disk_gb > 1000 then 1000 else raw_disk_gb
 
-    # 机器有 16 核，全部分配给 Spark Executor
+    # Spark resource settings for duplicate marking.
     Int spark_executor_cores = 16
-    # 机器有 32GB 内存，为主进程留 6GB，剩下 26GB 给 Spark
+    # Keep memory for the driver and assign the rest to Spark executor.
     Int java_driver_memory_gb = 6
     Int spark_executor_memory_gb = 26
 
     command <<<
         set -e
+        call_dir="$PWD"
+        copy_task_logs() {
+            cp -f "$call_dir/script" "$call_dir/script.txt" 2>/dev/null || true
+            cp -f "$call_dir/stdout" "$call_dir/stdout.txt" 2>/dev/null || true
+            cp -f "$call_dir/stderr" "$call_dir/stderr.txt" 2>/dev/null || true
+        }
+        trap copy_task_logs EXIT
+        local_work="/tmp/${sample_id}_markdup"
+        mkdir -p "$local_work" "$local_work/tmp" "$local_work/spark"
+        export TMPDIR="$local_work/tmp"
+        export TMP="$TMPDIR"
+        export TEMP="$TMPDIR"
+        export _JAVA_OPTIONS="-Djava.io.tmpdir=$TMPDIR"
+        cp -f ${input_bam} "$local_work/input.bam"
+        cp -f ${input_bam_index} "$local_work/input.bam.bai"
+        cd "$local_work"
 
-        # GATK Spark 工具需要通过 --java-options 为主进程分配内存
-        # 并通过 --conf 为 Spark 的执行器 (executors) 分配资源
-        gatk --java-options "-Xmx${java_driver_memory_gb}G" MarkDuplicatesSpark \
-            -I ${input_bam} \
+        # Mark duplicate reads and write Picard-style duplicate metrics.
+        gatk --java-options "-Djava.io.tmpdir=$TMPDIR -Xmx${java_driver_memory_gb}G" MarkDuplicatesSpark \
+            -I input.bam \
             -O ${output_bam_name} \
             -M ${metrics_file_name} \
+            --conf "spark.local.dir=$local_work/spark" \
             --conf 'spark.executor.cores=${spark_executor_cores}' \
             --conf 'spark.executor.memory=${spark_executor_memory_gb}g'
+        cp -f ${output_bam_name} ${output_bam_name}.bai ${metrics_file_name} "$call_dir"/
     >>>
 
     output {
-        # MarkDuplicatesSpark 会自动为输出的 BAM 文件生成索引
+        # MarkDuplicatesSpark writes the BAM index automatically.
         File dedup_bam = output_bam_name
         File dedup_bam_index = "${output_bam_name}.bai"
         File dedup_metrics = metrics_file_name
@@ -45,8 +63,7 @@ task mark_duplicates_spark {
 
     runtime {
         docker: docker_image
-        cluster: cluster_config
-        systemDisk: "cloud_ssd 40"
-        dataDisk: "cloud_ssd " + disk_gb + " /cromwell_root/"
+        instanceTypes: [cluster_config]
+        systemDisk: "cloud " + disk_gb
     }
 }

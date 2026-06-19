@@ -1,50 +1,61 @@
 task bwa_mem_and_sort {
 
-    # 输入来自于 fastp 的输出
+    # Trimmed FASTQs from fastp.
     File trimmed_fastq1
     File trimmed_fastq2
     String sample_id
 
-    # 基因组参考文件和相关索引
-    # 重要：BWA 需要 .amb, .ann, .bwt, .pac, .sa 索引文件
-    # 这些文件必须和 ref_fasta 位于同一个目录下，WDL 才会自动将它们一起定位
+    # Reference directory. BWA index files must be beside the FASTA.
     File ref_dir
     String fasta
 
-    # 可配置的参数
+    # Read group and platform settings.
     String platform
-    # --- 平台特定输入 ---
+    # Platform runtime inputs.
     String docker_image
     String cluster_config # e.g., "ecs.g6.8xlarge" for 32c/64GB
 
 
-    # 构造 RG (Read Group) 字符串，这是下游分析 (特别是 GATK) 的标准要求
+    # Read group is required by downstream GATK tools.
     String read_group = "@RG\\tID:${sample_id}\\tSM:${sample_id}\\tPL:${platform}"
 
-    # 定义输出文件名
+    # Sorted BAM output name.
     String output_bam_name = "${sample_id}.sorted.bam"
 
-    # 磁盘空间估算：(输入 FQ x 2.5) + 参考基因组大小 + 20GB 缓冲
-    Int disk_gb = ceil(size(trimmed_fastq1, "GB") + size(trimmed_fastq2, "GB")) * 2 + 320
+    # Estimate disk for FASTQs, sorted BAM, temporary sort files, and reference files.
+    Int raw_disk_gb = ceil(size(trimmed_fastq1, "GB") + size(trimmed_fastq2, "GB")) * 2 + 320
+    Int disk_gb = if raw_disk_gb > 1000 then 1000 else raw_disk_gb
 
-    # `command` 块中复现 shell 管道
+    # Align reads with BWA, convert to BAM, and coordinate-sort with samtools.
     command <<<
-        # -e: 命令失败则任务失败
-        # -o pipefail: 管道中任何一个命令失败，整个管道都视为失败。这对于发现 bwa 的错误至关重要！
+        # pipefail makes alignment/sort failures stop the task.
         set -e -o pipefail
+        call_dir="$PWD"
+        copy_task_logs() {
+            cp -f "$call_dir/script" "$call_dir/script.txt" 2>/dev/null || true
+            cp -f "$call_dir/stdout" "$call_dir/stdout.txt" 2>/dev/null || true
+            cp -f "$call_dir/stderr" "$call_dir/stderr.txt" 2>/dev/null || true
+        }
+        trap copy_task_logs EXIT
+        local_work="/tmp/${sample_id}_mapping"
+        mkdir -p "$local_work"
+        cp -f ${trimmed_fastq1} "$local_work/read1.fq.gz"
+        cp -f ${trimmed_fastq2} "$local_work/read2.fq.gz"
 
-        # BWA 比对 -> SAM 转 BAM -> BAM 排序
+        # BWA MEM -> BAM conversion -> coordinate sort.
         bwa mem -M \
                 -R '${read_group}' \
                 -t $(nproc) \
                 ${ref_dir}/${fasta} \
-                ${trimmed_fastq1} \
-                ${trimmed_fastq2} | \
+                "$local_work/read1.fq.gz" \
+                "$local_work/read2.fq.gz" | \
         samtools view -bS -@ $(nproc) - | \
-        samtools sort -@ $(nproc) -o ${output_bam_name} -
+        samtools sort -@ $(nproc) -T "$local_work/${sample_id}.sorttmp" -o "$local_work/${output_bam_name}" -
 
-        # 为生成的 BAM 文件创建索引，这是后续步骤必需的
-        samtools index -@ $(nproc) ${output_bam_name}
+        # Create BAM index for downstream GATK tasks.
+        samtools index -@ $(nproc) "$local_work/${output_bam_name}"
+        cp -f "$local_work/${output_bam_name}" ${output_bam_name}
+        cp -f "$local_work/${output_bam_name}.bai" ${output_bam_name}.bai
     >>>
 
     output {
@@ -54,8 +65,7 @@ task bwa_mem_and_sort {
 
     runtime {
         docker: docker_image
-        cluster: cluster_config
-        systemDisk: "cloud_ssd 40"
-        dataDisk: "cloud_ssd " + disk_gb + " /cromwell_root/"
+        instanceTypes: [cluster_config]
+        systemDisk: "cloud " + disk_gb
     }
 }

@@ -8,7 +8,7 @@ task qualimap_bam_qc {
     # A BED or GFF file with gene/feature definitions
     File? intervals_bed
 
-    # --- 平台特定输入 ---
+    # Platform runtime inputs.
     String docker_image
     String cluster_config
 
@@ -18,13 +18,26 @@ task qualimap_bam_qc {
     String output_archive_name = "${sample_id}.qualimap_results.tar.gz"
 
     # Disk space estimation: Input BAM size * 2 (for temp files) + 20GB buffer
-    Int disk_gb = ceil(size(recalibrated_bam, "GB") * 3) + 320
+    Int raw_disk_gb = ceil(size(recalibrated_bam, "GB") * 3) + 320
+    Int disk_gb = if raw_disk_gb > 1000 then 1000 else raw_disk_gb
 
-    # 对于 32GB 的机器，为 Qualimap 的 Java 进程分配 28GB，为 OS 预留 4GB
+    # Java heap for Qualimap. Keep some memory for the OS and Cromwell runtime.
     Int java_mem_gb = 28
 
     command <<<
         set -e
+        call_dir="$PWD"
+        copy_task_logs() {
+            cp -f "$call_dir/script" "$call_dir/script.txt" 2>/dev/null || true
+            cp -f "$call_dir/stdout" "$call_dir/stdout.txt" 2>/dev/null || true
+            cp -f "$call_dir/stderr" "$call_dir/stderr.txt" 2>/dev/null || true
+        }
+        trap copy_task_logs EXIT
+        local_work="/tmp/${sample_id}_qualimap"
+        mkdir -p "$local_work"
+        cp -f ${recalibrated_bam} "$local_work/input.bam"
+        cp -f ${recalibrated_bam_index} "$local_work/input.bam.bai"
+        cd "$local_work"
 
         if [ ${intervals_bed} ]; then
             awk 'BEGIN{OFS="\t"}{sub("\r","",$3);print $1,$2,$3,"",0,"."}' ${intervals_bed} > new.bed
@@ -35,8 +48,8 @@ task qualimap_bam_qc {
 
         # Run Qualimap, directing its output to a specific directory
         qualimap bamqc \
-            -bam ${recalibrated_bam} \
-            INTERVAL \
+            -bam input.bam \
+            $INTERVAL \
             -nt $(nproc) \
             --java-mem-size=${java_mem_gb}G \
             -outformat PDF:HTML \
@@ -45,6 +58,7 @@ task qualimap_bam_qc {
         # Compress the entire output directory into a single tarball
         # This makes it easy to manage as a single output file in WDL
         tar -czvf ${output_archive_name} ${output_dir_name}
+        cp -f ${output_archive_name} "$call_dir"/
     >>>
 
     output {
@@ -54,8 +68,7 @@ task qualimap_bam_qc {
 
     runtime {
         docker: docker_image
-        cluster: cluster_config
-        systemDisk: "cloud_ssd 40"
-        dataDisk: "cloud_ssd " + disk_gb + " /cromwell_root/"
+        instanceTypes: [cluster_config]
+        systemDisk: "cloud " + disk_gb
     }
 }
