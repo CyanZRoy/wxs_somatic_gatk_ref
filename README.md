@@ -6,7 +6,7 @@ $ choppy samples CyanZRoy/wxs_somatic_gatk_ref > samples.csv
 $ choppy samples --no-default CyanZRoy/wxs_somatic_gatk_ref> samples.csv
 
 # 提交任务
-$ choppy batch choppy_migration_test/wxs_somatic_gatk_ref samples.csv -p Your_project_name -l Your_label
+$ choppy batch CyanZRoy/wxs_somatic_gatk_ref samples.csv -p Your_project_name -l Your_label
 
 # 查询任务运行状况
 $ choppy query -L Your_label | grep "status"
