@@ -1,9 +1,9 @@
 # Quick Start
 ```
 # 准备 samples.csv 文件
-$ choppy samples choppy_migration_test/wxs_somatic_gatk_ref > samples.csv
+$ choppy samples CyanZRoy/wxs_somatic_gatk_ref > samples.csv
 # 准备无默认参数的samples.csv 文件
-$ choppy samples --no-default choppy_migration_test/wxs_somatic_gatk_ref> samples.csv
+$ choppy samples --no-default CyanZRoy/wxs_somatic_gatk_ref> samples.csv
 
 # 提交任务
 $ choppy batch choppy_migration_test/wxs_somatic_gatk_ref samples.csv -p Your_project_name -l Your_label
